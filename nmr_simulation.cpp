@@ -8,14 +8,19 @@
 #include <ctime>
 #include <string>
 #include <complex>
+#include <iomanip>
 
-#include "gnuplot-iostream.h"
 //#include "kiss_fft130/kiss_fft.h"
 #include "kiss_fft130/kissfft.hh"
 //#include "kiss_fft130/_kiss_fft_guts.h"
 
 #define FREQUENCY_HZ 400'000'000
 #define ONE_PPM_IN_HZ 400
+
+#define NP_64K 65536
+
+#define M_PI 3.141592653589793238462
+
 
 class Nucleus
 {
@@ -41,11 +46,11 @@ int Nucleus::count = 0;
 
 
 double fid_function(double t, int frequency, double phase) {
-	return sin(static_cast<double>(frequency) * t + phase) * exp(-t * 2);
+	return sin(2 * M_PI * static_cast<double>(frequency) * t + phase) * exp(-t * 2);
 }
 
 double fid_function_cosine(double t, int frequency, double phase) {
-	return cos(static_cast<double>(frequency) * t + phase) * exp(-t * 2);
+	return cos(2 * M_PI * static_cast<double>(frequency) * t + phase) * exp(-t * 2);
 }
 
 void log(std::string logstr) {
@@ -54,30 +59,29 @@ void log(std::string logstr) {
 
 int main()
 {
-	Gnuplot gp("\"C:\\Program Files\\gnuplot\\bin\\gnuplot.exe\"");
-
 	std::random_device rd{};
 	std::mt19937 gen{rd()};
 	std::uniform_real_distribution<double> unif(0, 1);
 	const auto random_0_1 = [&unif, &gen]() -> double { return unif(gen); };
 
+
 	// ---------------- \\
 	// --- Settings --- \\
 	// ---------------- \\
 
-	const int numberOfDecayPoints = 65536;
+	const int numberOfDecayPoints = NP_64K;
 	const int spectralWidthPpm = 20;
 	const double acqusitionTime = static_cast<double>(numberOfDecayPoints) / (2 * spectralWidthPpm * ONE_PPM_IN_HZ);
 	const double deltaTime = acqusitionTime/numberOfDecayPoints;
 
-	const int numberOfNuclei = 3;
+	const int numberOfNuclei = 1;
 
 	const bool samePhases = true;
 	const bool makeNoise = true;
 	const double noiseMagnitude = 0.1;
 
 	std::fstream outfile;
-	outfile.open("E:\\out.txt", 'w');
+	outfile.open("D:\\out.txt");
 
 	outfile << "--- Settings ---\n";
 	outfile << "* Base frequency = " << FREQUENCY_HZ << " Hz\n";
@@ -87,6 +91,7 @@ int main()
 	outfile << "* Digital resolution = " << std::setprecision(4) << static_cast<double>(1)/acqusitionTime << " Hz\n";
 	//outfile << "* Sample rate = " << sampleRate << " points per second\n";
 	outfile << "* Number of points in FID = " << numberOfDecayPoints << "\n\n\n";
+
 
 	// ----------------------------------- \\
 	// --- Nuclei system configuration --- \\
@@ -116,49 +121,31 @@ int main()
 		}
 	}
 
-
-	// *** Configure gnuplot
-	gp << "set title 'Test'\n";
-	gp << "set ylabel 'f(x)' font 'Helvetica, 12'\n";
-	gp << "set xlabel 'x' font 'Helvetica, 12'\n";
-	
-
-	// *** Plot all sine waves
-	//gp << "plot ";
-	//for (const auto& it : nucleiVector) gp << "'-' with lines lw 2 title '" << it.chemicalShift << "',";
-	//gp << "\n";
-	//for (const auto& it : nucleiVector) {
-	//	gp.send1d(std::pair(timeVector, it.decay));
-	//}
-
 	log("Sum FID for all nuclei");
 	std::vector<double> sineWavesSum(numberOfDecayPoints);
 	for (const auto& it : nucleiVector) {
 		std::transform(sineWavesSum.cbegin(), sineWavesSum.cend(), it.decay.cbegin(), sineWavesSum.begin(), std::plus<>{});
 	}
+	
 
-	// *** Plot the sum all sine waves
-	//gp << "plot '-' with lines lw 2 title 'sum'";
-	//gp << "\n";
-	//gp.send1d(std::pair(timeVector, sineWavesSum));
+	// ------------------------------------- \\
+	// --- Simulate quadrature detection --- \\
+	// ------------------------------------- \\
 	
 	log("Create pure sine and cosine with base frequency");
 	std::vector<double> sineWithBaseFrequency;
-	for (const auto& time : timeVector) sineWithBaseFrequency.push_back(numberOfNuclei * fid_function(time, FREQUENCY_HZ, 0.0));
+	for (const auto& time : timeVector) sineWithBaseFrequency.push_back(fid_function(time, FREQUENCY_HZ, 0.0));
 
 	std::vector<double> cosineWithBaseFrequency;
-	for (const auto& time : timeVector) cosineWithBaseFrequency.push_back(numberOfNuclei * fid_function_cosine(time, FREQUENCY_HZ, 0.0));
+	for (const auto& time : timeVector) cosineWithBaseFrequency.push_back(fid_function_cosine(time, FREQUENCY_HZ, 0.0));
 
 	log("Simulate quadrature detection: substract pure sine and cosine from FID");
 	std::vector<double> FID_real(numberOfDecayPoints);
-	std::transform(sineWavesSum.cbegin(), sineWavesSum.cend(), sineWithBaseFrequency.cbegin(), FID_real.begin(), std::minus<>{});
+	std::transform(sineWavesSum.cbegin(), sineWavesSum.cend(), sineWithBaseFrequency.cbegin(), FID_real.begin(), std::multiplies<>{});
 
 	std::vector<double> FID_imag(numberOfDecayPoints);
-	std::transform(sineWavesSum.cbegin(), sineWavesSum.cend(), cosineWithBaseFrequency.cbegin(), FID_imag.begin(), std::minus<>{});
+	std::transform(sineWavesSum.cbegin(), sineWavesSum.cend(), cosineWithBaseFrequency.cbegin(), FID_imag.begin(), std::multiplies<>{});
 
-
-	//gp << ", '-' with lines lw 2 title 'minus'\n";
-	//gp.send1d(std::pair(timeVector, sineWavesSum_minusBaseFreq));
 
 	// ------------------ \\
 	// --- FFT of FID --- \\
@@ -174,8 +161,7 @@ int main()
 		return 0;
 	}
 
-	typedef kissfft<double> FFT;
-	FFT fft(numberOfDecayPoints, false);
+	kissfft<double> fft(numberOfDecayPoints, false);
 	std::vector<std::complex<double>> fidComplexData(numberOfDecayPoints);
 	std::vector<std::complex<double>> fidResult(numberOfDecayPoints);
 
@@ -187,7 +173,12 @@ int main()
 
 	double deltaOmega = static_cast<double>(1) / acqusitionTime;
 	std::vector<double> frequencies(numberOfDecayPoints);
-	std::generate(frequencies.begin(), frequencies.end(), [i = 0, &deltaOmega]() mutable {return deltaOmega * (i++); });
+	std::generate(frequencies.begin(), frequencies.end(), [i = -numberOfDecayPoints/2, &deltaOmega]() mutable {return deltaOmega * (i++); });
+
+	// *** Shift FFT results
+	auto centerIter = fidResult.begin() + fidResult.size()/2;
+	std::vector<std::complex<double>> fidResult_shifted(centerIter, fidResult.end());
+	fidResult_shifted.insert(fidResult_shifted.end(), fidResult.begin(), centerIter);
 
 
 	// ---------------------------- \\
@@ -198,33 +189,33 @@ int main()
 	auto timeIter = timeVector.begin();
 	auto realFidIter = FID_real.begin();
 	auto imagFidIter = FID_imag.begin();
-	auto spectrumIter = fidResult.begin();
+	auto spectrumIter = fidResult_shifted.begin();
 	auto freqIter = frequencies.begin();
 
 	outfile << "\n\n--- Data ---\n";
 	outfile << "time\tfid_real\tfid_imag\tfrequency\tspectrum_real\tspectrum_imag\n";
-	outfile << std::setprecision(10);
+
 	while (timeIter != timeVector.end()
 		|| realFidIter != FID_real.end()
 		|| imagFidIter != FID_imag.end()
-		|| spectrumIter != fidResult.end()
+		|| spectrumIter != fidResult_shifted.end()
 		|| freqIter != frequencies.end())
 	{
-		outfile << *timeIter << "\t" << *realFidIter << "\t" << *imagFidIter << "\t" << *freqIter << "\t" << (*spectrumIter).real() << "\t" << (*spectrumIter).imag() << "\n";
+		outfile << std::setprecision(10) << *timeIter << "\t"\
+				<< *realFidIter << "\t"\
+				<< *imagFidIter << "\t"\
+				<< *freqIter << "\t"\
+				<< (*spectrumIter).real() << "\t"\
+				<< (*spectrumIter).imag() << "\n";
+
 		++timeIter;
 		++realFidIter;
 		++imagFidIter;
-		++spectrumIter;
 		++freqIter;
+		++spectrumIter;
 	}
 	outfile.close();
 
 
-	//gp << "plot '-' with lines lw 2 title 'sum'";
-	//gp << "\n";
-	//gp.send1d(std::pair(timeVector, sineWavesSum_minusBaseFreq));
-
-
 	log("Program is finished");
-	//std::cin.get();
 }
